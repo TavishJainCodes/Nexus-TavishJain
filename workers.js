@@ -56,8 +56,8 @@ export function setChaos(id, { crashOnStart, crashMidTask, slowFactor }) {
   if (!current) throw new Error(`no such worker: ${id}`);
   setChaosStmt.run({
     id,
-    crashOnStart: crashOnStart ?? current.crash_on_start,
-    crashMidTask: crashMidTask ?? current.crash_mid_task,
+    crashOnStart: (crashOnStart ?? current.crash_on_start) ? 1 : 0,
+    crashMidTask: (crashMidTask ?? current.crash_mid_task) ? 1 : 0,
     slowFactor: slowFactor ?? current.slow_factor,
   });
   logEvent({

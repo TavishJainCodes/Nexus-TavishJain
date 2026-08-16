@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Nexus Dashboard</title>
+<style>
+  body { font-family: monospace; margin: 20px; background: #111; color: #ddd; }
+  h2 { color: #6cf; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+  td, th { border: 1px solid #444; padding: 4px 8px; text-align: left; font-size: 12px; }
+  button { margin: 2px; cursor: pointer; }
+  .dead, .dead td { background: #400; }
+  .out_of_service { background: #440; }
+  #events { max-height: 350px; overflow-y: auto; }
+  #events details { margin-bottom: 4px; border: 1px solid #333; padding: 4px; }
+</style>
+</head>
+<body>
+
+<div id="status" style="font-size:1.1em; padding:10px; border-radius:4px; margin-bottom:16px;"></div>
+
+<h2>Backlog</h2>
+<table id="backlog"></table>
+
+<details open>
+<summary style="cursor:pointer; color:#6cf; font-size:1.2em; margin-bottom:8px;">Tasks</summary>
+<table id="tasks"></table>
+</details>
+
+<h2>Workers</h2>
+<table id="workers"></table>
+
+<h2>Submit Work</h2>
+<button onclick="submitWork()">Submit 1 random job</button>
+<button onclick="resubmitLast()">Resubmit last job (test duplicate)</button>
+<span id="dupResult"></span>
+<br>
+<button onclick="submitMany(10)">Submit 10 random jobs</button>
+<button onclick="submitMany(100)">Submit 100 random jobs</button>
+<button onclick="submitMany(1000)">Submit 1000 random jobs</button>
+<button onclick="clearDb()" style="background:#600;color:#fff;">Clear DB</button>
+
+<h2>Event Log (last hour) — grouped by subject</h2>
+<div id="events"></div>
+
+<script>
+const API = "";
+let n = 0;
+let lastJobId = null;
+
+async function refresh() {
+  const [backlog, pending, inFlight, done, dead, workers, events] = await Promise.all([
+    fetch(API + "/backlog").then(r => r.json()),
+    fetch(API + "/work?state=pending").then(r => r.json()),
+    fetch(API + "/work?state=in_flight").then(r => r.json()),
+    fetch(API + "/work?state=done").then(r => r.json()),
+    fetch(API + "/work?state=dead").then(r => r.json()),
+    fetch(API + "/workers").then(r => r.json()),
+    fetch(API + "/events").then(r => r.json()),
+  ]);
+
+  // ---- Status banner (R-12: state it plainly, don't imply it) ----
+  const deadWorkers = workers.filter(w => w.state === 'dead' || w.state === 'out_of_service');
+  const restarting = workers.filter(w => w.state === 'restarting');
+  const statusEl = document.getElementById("status");
+  if (deadWorkers.length === 0 && dead.length === 0 && restarting.length === 0) {
+    statusEl.style.background = "#141"; statusEl.style.color = "#8f8";
+    statusEl.textContent = "✅ All clear — no dead/out-of-service workers, no dead-lettered work.";
+  } else {
+    statusEl.style.background = "#411"; statusEl.style.color = "#f88";
+    statusEl.textContent =
+      `⚠️ ${deadWorkers.length} worker(s) down/out-of-service, ${restarting.length} restarting, ${dead.length} item(s) dead-lettered.`;
+  }
+
+  // ---- Backlog ----
+  document.getElementById("backlog").innerHTML =
+    "<tr><th>State</th><th>Count</th><th>Oldest</th></tr>" +
+    backlog.map(b => `<tr><td>${b.state}</td><td>${b.count}</td><td>${new Date(b.oldest_created_at).toLocaleTimeString()}</td></tr>`).join("");
+
+  // ---- Tasks ----
+  const allTasks = [...pending, ...inFlight, ...done, ...dead];
+  document.getElementById("tasks").innerHTML =
+    "<tr><th>ID</th><th>State</th><th>Attempts</th><th>Worker</th></tr>" +
+    allTasks.map(t => `<tr class="${t.state === 'dead' ? 'dead' : ''}"><td>${t.id}</td><td>${t.state}</td><td>${t.attempt_count}</td><td>${t.worker_id ?? ""}</td></tr>`).join("");
+
+  // ---- Workers ----
+  document.getElementById("workers").innerHTML =
+    "<tr><th>ID</th><th>State</th><th>Restarts</th><th>Crash on Start</th><th>Crash Mid-task</th><th>Slow Factor</th><th>Actions</th></tr>" +
+    workers.map(w => `
+      <tr class="${w.state}">
+        <td>${w.id}</td><td>${w.state}</td><td>${w.restart_count}</td>
+        <td>${w.crash_on_start ? "🔴 ON" : "off"}</td>
+        <td>${w.crash_mid_task ? "🔴 ON" : "off"}</td>
+        <td>${w.slow_factor}x</td>
+        <td>
+          <button onclick="chaos('${w.id}','crashOnStart')">Kill on start</button>
+          <button onclick="chaos('${w.id}','crashMidTask')">Crash mid-task</button>
+          <button onclick="chaos('${w.id}','slowFactor')">Make slow</button>
+          <button onclick="returnToService('${w.id}')">Return to service</button>
+        </td>
+      </tr>`).join("");
+
+  // ---- Events, grouped by subject (R-05: group records by subject) ----
+  const groups = {};
+  events.events.forEach(e => {
+    groups[e.subject] = groups[e.subject] || [];
+    groups[e.subject].push(e);
+  });
+  const orderedSubjects = Object.keys(groups).sort((a, b) => {
+    const aLast = groups[a][groups[a].length - 1].at;
+    const bLast = groups[b][groups[b].length - 1].at;
+    return bLast.localeCompare(aLast);
+  });
+  document.getElementById("events").innerHTML = orderedSubjects.map(subj => `
+    <details>
+      <summary style="cursor:pointer;color:#6cf;">${subj} (${groups[subj].length} events, last: ${groups[subj][groups[subj].length - 1].event})</summary>
+      <table>
+        <tr><th>Time</th><th>Event</th><th>Reason</th></tr>
+        ${groups[subj].slice().reverse().map(e =>
+          `<tr><td>${new Date(e.at).toLocaleTimeString()}</td><td>${e.event}</td><td>${e.reason ?? ""}</td></tr>`
+        ).join("")}
+      </table>
+    </details>
+  `).join("");
+}
+
+async function submitWork() {
+  n++;
+  lastJobId = "job-" + Date.now() + "-" + n;
+  await fetch(`${API}/work`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: lastJobId, type: "demo", body: {} }),
+  });
+  refresh();
+}
+
+async function resubmitLast() {
+  if (!lastJobId) { alert("Submit a job first"); return; }
+  const res = await fetch(`${API}/work`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: lastJobId, type: "demo", body: {} }),
+  });
+  const data = await res.json();
+  document.getElementById("dupResult").textContent =
+    data.duplicate ? `✅ Duplicate detected for ${lastJobId} — no new row created` : `⚠️ Not flagged as duplicate`;
+  refresh();
+}
+
+async function submitMany(count) {
+  const jobs = [];
+  for (let i = 0; i < count; i++) {
+    n++;
+    jobs.push(
+      fetch(`${API}/work`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "job-" + Date.now() + "-" + n, type: "demo", body: {} }),
+      })
+    );
+  }
+  await Promise.all(jobs);
+  refresh();
+}
+
+async function chaos(id, flag) {
+  const body = { crashOnStart: false, crashMidTask: false, slowFactor: 1.0 };
+  if (flag === "slowFactor") body.slowFactor = 8.0; else body[flag] = true;
+  await fetch(`${API}/workers/${id}/chaos`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  refresh();
+}
+
+async function returnToService(id) {
+  await fetch(`${API}/workers/${id}/return-to-service`, { method: "POST" });
+  refresh();
+}
+
+async function clearDb() {
+  if (!confirm("Clear all tasks and events?")) return;
+  await fetch(`${API}/admin/clear-db`, { method: "POST" });
+  refresh();
+}
+
+setInterval(refresh, 1000);
+refresh();
+</script>
+</body>
+</html>
