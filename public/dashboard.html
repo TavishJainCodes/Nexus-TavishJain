@@ -40,10 +40,18 @@
 <button onclick="submitMany(1000)">Submit 1000 random jobs</button>
 <button onclick="clearDb()" style="background:#600;color:#fff;">Clear DB</button>
 
-<h2>Event Log (last hour) — grouped by subject</h2>
+<h2>Event Log (last hour)</h2>
+<div>
+  <button onclick="setGroupMode('event')" id="btn-group-event">Group by Event</button>
+  <button onclick="setGroupMode('subject')" id="btn-group-subject">Group by Subject</button>
+</div>
+<div id="inspectPanel" style="display:none; border:2px solid #6cf; padding:8px; margin:8px 0;"></div>
 <div id="events"></div>
 
 <script>
+  let openGroups = new Set();
+  let groupMode = 'event';
+let lastEventsRaw = [];
 const API = "";
 let n = 0;
 let lastJobId = null;
@@ -101,27 +109,92 @@ async function refresh() {
       </tr>`).join("");
 
   // ---- Events, grouped by subject (R-05: group records by subject) ----
+  // ---- Events, grouped by event type (readable at scale) ----
   const groups = {};
   events.events.forEach(e => {
-    groups[e.subject] = groups[e.subject] || [];
-    groups[e.subject].push(e);
+    groups[e.event] = groups[e.event] || [];
+    groups[e.event].push(e);
   });
-  const orderedSubjects = Object.keys(groups).sort((a, b) => {
+  const orderedTypes = Object.keys(groups).sort((a, b) => {
     const aLast = groups[a][groups[a].length - 1].at;
     const bLast = groups[b][groups[b].length - 1].at;
     return bLast.localeCompare(aLast);
   });
-  document.getElementById("events").innerHTML = orderedSubjects.map(subj => `
-    <details>
-      <summary style="cursor:pointer;color:#6cf;">${subj} (${groups[subj].length} events, last: ${groups[subj][groups[subj].length - 1].event})</summary>
+  lastEventsRaw = events.events;
+  renderEvents(lastEventsRaw);
+}
+
+function setGroupMode(mode) {
+  groupMode = mode;
+  document.getElementById("btn-group-event").style.fontWeight = mode === 'event' ? 'bold' : 'normal';
+  document.getElementById("btn-group-subject").style.fontWeight = mode === 'subject' ? 'bold' : 'normal';
+  renderEvents(lastEventsRaw);
+}
+
+function renderEvents(events) {
+  const isSubject = groupMode === 'subject';
+  const keyFn = isSubject ? (e => e.subject) : (e => e.event);
+  const groups = {};
+  events.forEach(e => {
+    const k = keyFn(e);
+    groups[k] = groups[k] || [];
+    groups[k].push(e);
+  });
+  const ordered = Object.keys(groups).sort((a, b) =>
+    groups[b][groups[b].length - 1].at.localeCompare(groups[a][groups[a].length - 1].at)
+  );
+
+  document.getElementById("events").innerHTML = ordered.map(key => `
+    <details data-key="${key}" ${openGroups.has(key) ? "open" : ""}>
+      <summary style="cursor:pointer;color:#6cf;">${key} (${groups[key].length})</summary>
+      ${isSubject ? `<button type="button" onclick="inspectSubject('${key}')" style="margin:4px 0;">🔍 inspect</button>` : ''}
       <table>
-        <tr><th>Time</th><th>Event</th><th>Reason</th></tr>
-        ${groups[subj].slice().reverse().map(e =>
-          `<tr><td>${new Date(e.at).toLocaleTimeString()}</td><td>${e.event}</td><td>${e.reason ?? ""}</td></tr>`
+        <tr><th>Time</th>${isSubject ? '' : '<th>Subject</th>'}<th>Reason</th></tr>
+        ${groups[key].slice().reverse().slice(0, 50).map(e =>
+          `<tr><td>${new Date(e.at).toLocaleTimeString()}</td>${isSubject ? '' : `<td>${e.subject}</td>`}<td>${e.reason ?? ""}</td></tr>`
         ).join("")}
       </table>
     </details>
   `).join("");
+
+  document.querySelectorAll("#events details").forEach(d => {
+    d.addEventListener("toggle", () => {
+      const key = d.getAttribute("data-key");
+      if (d.open) openGroups.add(key); else openGroups.delete(key);
+    });
+  });
+}
+
+async function inspectSubject(label) {
+  const [subjectType, ...rest] = label.split(':');
+  const subjectId = rest.join(':');
+  const subjectEvents = await fetch(`${API}/events/${subjectType}/${subjectId}`).then(r => r.json());
+  const panel = document.getElementById("inspectPanel");
+  if (subjectEvents.length === 0) { panel.style.display = "none"; return; }
+
+  const earliestTs = new Date(subjectEvents[0].at).getTime();
+  const CONTEXT_WINDOW_MS = 5000;
+  const context = lastEventsRaw.filter(e => {
+    if (e.subject === label) return false;
+    const t = new Date(e.at).getTime();
+    return t < earliestTs && t >= earliestTs - CONTEXT_WINDOW_MS;
+  });
+
+  panel.style.display = "block";
+  panel.innerHTML = `
+    <strong>Inspecting: ${label}</strong>
+    <button onclick="document.getElementById('inspectPanel').style.display='none'" style="float:right;">✕ close</button>
+    <h4>Full history for this subject</h4>
+    <table>
+      <tr><th>Time</th><th>Event</th><th>Reason</th></tr>
+      ${subjectEvents.map(e => `<tr><td>${new Date(e.at).toLocaleTimeString()}</td><td>${e.event}</td><td>${e.reason ?? ""}</td></tr>`).join("")}
+    </table>
+    <h4>What happened just before, elsewhere (${CONTEXT_WINDOW_MS / 1000}s window — possible cause)</h4>
+    <table>
+      <tr><th>Time</th><th>Subject</th><th>Event</th><th>Reason</th></tr>
+      ${context.length ? context.map(e => `<tr><td>${new Date(e.at).toLocaleTimeString()}</td><td>${e.subject}</td><td>${e.event}</td><td>${e.reason ?? ""}</td></tr>`).join("") : '<tr><td colspan="4">Nothing else happened in that window</td></tr>'}
+    </table>
+  `;
 }
 
 async function submitWork() {

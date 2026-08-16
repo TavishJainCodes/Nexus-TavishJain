@@ -4,9 +4,3 @@ node_modules/
 *.db-shm
 .env
 NOTES.md
-smoke-test-dispatch-deadletter.js
-smoke-test-dispatch-happy.js
-smoke-test-queue.js
-smoke-test-reconcile-boot.js
-smoke-test-reconcile-crash.js
-smoke-test-supervisor-budget.js
