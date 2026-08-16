@@ -1,0 +1,25 @@
+{
+  "name": "nexus-tavishjain",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TavishJainCodes/Nexus-TavisJain.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/TavishJainCodes/Nexus-TavisJain/issues"
+  },
+  "homepage": "https://github.com/TavishJainCodes/Nexus-TavisJain#readme",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1"
+  }
+}
