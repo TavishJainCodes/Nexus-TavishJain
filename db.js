@@ -51,14 +51,13 @@ CREATE INDEX IF NOT EXISTS idx_work_items_state_next
 
 CREATE TABLE IF NOT EXISTS workers (
   id                 TEXT PRIMARY KEY,
-  service            TEXT NOT NULL,       -- which stand-in service this worker belongs to
-  current_release_id TEXT,                -- FK-ish -> releases.id; lets events auto-link
-  state              TEXT NOT NULL CHECK (state IN ('idle','busy','restarting','dead')),
+  service            TEXT NOT NULL,
+  current_release_id TEXT,
+  state              TEXT NOT NULL CHECK (state IN ('idle','busy','restarting','dead','out_of_service')),
   restart_count      INTEGER NOT NULL DEFAULT 0,
   last_restart_at    INTEGER,
-  settled_since      INTEGER,             -- when current clean run started; budget only
-                                           -- resets once (now - settled_since) clears the
-                                           -- settling-period threshold, per Section 3.4
+  settled_since      INTEGER,
+  next_restart_at    INTEGER,           -- when a scheduled restart should actually happen
   crash_on_start     INTEGER NOT NULL DEFAULT 0,
   crash_mid_task     INTEGER NOT NULL DEFAULT 0,
   slow_factor        REAL NOT NULL DEFAULT 1.0
