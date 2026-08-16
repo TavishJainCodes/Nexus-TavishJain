@@ -5,7 +5,7 @@
 Requirements: Node.js 18+ (built/tested on v24.14.1). No other dependencies, no network access needed, no accounts.
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/TavishJainCodes/Nexus-TavishJain
 cd nexus-tavishjain
 npm install
 npm start
