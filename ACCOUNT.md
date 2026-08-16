@@ -52,6 +52,18 @@ R-10), speed-limited recovery (R-11, stretch only), order-provenance
   (setClock in db.js) rather than real-time waits — tests jump the
   virtual clock directly to next_attempt_at instead of sleeping, so the
   proof is fast and deterministic (Rule 04).
+  - Boot-time reconciliation (reconcile.js) runs before the dispatcher
+    starts ticking. It requeues anything left `in_flight` (attempt_count
+    is preserved, not reset — a restart must not grant a fresh budget)
+    and resets stranded workers (`busy`/`restarting`) back to `idle`
+    without touching restart_count/settled_since, since dying because the
+    platform died is not the same as the worker itself failing.
+
+- Deliberately does NOT touch workers already in state `dead` on boot —
+  reviving a dead worker is an earned action via the supervisor, not
+  something a bare process restart should grant for free. This keeps
+  the circuit-breaker's "earn recovered" rule (Section 3.4) intact
+  across restarts, not just within one process lifetime.
 
 ## Failure behaviour
 
@@ -72,6 +84,13 @@ R-10), speed-limited recovery (R-11, stretch only), order-provenance
 - Not yet handled: crash_mid_task outcome isn't separately tested yet
   (code path exists in workers.js/dispatcher.js, only crash_on_start has
   been exercised so far).
+  - Hard process kill (process.exit) while an item is in_flight: on next
+    boot, reconcileOnBoot() requeues the item to pending with its
+    attempt_count preserved, resets its worker to idle, and logs
+    orphaned_by_restart / reset_after_restart events explaining why.
+    Verified via smoke-test-reconcile-crash.js +
+    smoke-test-reconcile-boot.js as two separate process invocations
+    against the same nexus.db.
 
 ## Limits
 
@@ -88,6 +107,14 @@ R-10), speed-limited recovery (R-11, stretch only), order-provenance
   (setWorkerState call). Until supervisor.js exists, "the platform
   brings itself back" (Section 3.4) isn't actually true — currently an
   operator/test script has to do it by hand.
+  - Reconciliation can't tell whether an orphaned in_flight item was
+    actually finished by the worker right before the process died (the
+    "said done but the message never arrived" case from Section 3.1) — it
+    always requeues and retries. If the underlying task isn't naturally
+    idempotent on the receiving end, a requeued item could double-run.
+    This is the same gap R-03 talks about; we handle it by making the
+    platform-level delivery safe to repeat, not by detecting the specific
+    case.
 
 ## Confidence
 
